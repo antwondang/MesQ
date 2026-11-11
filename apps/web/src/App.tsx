@@ -1,397 +1,479 @@
+import { useEffect, useRef, useState } from 'react';
 import {
-  Activity,
   ArrowDownToLine,
+  ArrowRight,
   ArrowUpRight,
-  CheckCheck,
+  BriefcaseBusiness,
+  CalendarDays,
+  Check,
   ChevronLeft,
   ChevronRight,
-  CircleHelp,
-  Inbox,
   Plus,
   Search,
-  TriangleAlert,
+  X,
 } from 'lucide-react';
-import { useState } from 'react';
-import type {
-  AppConfig,
-  Metrics,
-  GuideDetail as Detail,
-  GuidePage,
+import {
+  localToday,
+  nextDue,
+  statusLabels,
+  statuses,
+  type Application,
+  type ApplicationList,
+  type Status,
+  type Summary,
+  type View,
 } from '../../../packages/shared/contracts.js';
-import { subjects, subjectLabels } from '../../../packages/shared/contracts.js';
-import { sampleGuides } from '../../../packages/shared/samples.js';
-import { duration, fetchJson, timeLabel, useDebounced, usePoll } from './api.js';
-import { NewGuide } from './NewGuide.js';
-import { StatusBadge, GuideDetail } from './GuideDetail.js';
+import { ApplicationEditor } from './ApplicationEditor.js';
+import { dateLabel, fetchJson, useDebounced, usePoll } from './api.js';
 
-export function App() {
-  const [status, setStatus] = useState('');
-  const [subject, setSubject] = useState('');
-  const [search, setSearch] = useState('');
-  const query = useDebounced(search);
-  const [page, setPage] = useState(1);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [revision, setRevision] = useState(0);
-  const [seeding, setSeeding] = useState(false);
-  const [seedError, setSeedError] = useState('');
-  const params = new URLSearchParams({
-    page: String(page),
-    pageSize: '12',
-    ...(status ? { status } : {}),
-    ...(subject ? { subject } : {}),
-    ...(query ? { q: query } : {}),
-  });
-  const guides = usePoll<GuidePage>(`/api/guides?${params}`, revision);
-  const metrics = usePoll<Metrics>('/api/metrics', revision);
-  const config = usePoll<AppConfig>('/api/config');
-  const selectedId = selected ?? guides.value?.items[0]?.id;
-  const detail = usePoll<Detail>(selectedId ? `/api/guides/${selectedId}` : null, revision);
-  const counts = metrics.value?.counts;
-  function filter(nextStatus: string) {
-    setStatus(nextStatus);
-    setPage(1);
-    setSelected(null);
-  }
-  async function loadSamples() {
-    setSeeding(true);
-    setSeedError('');
-    try {
-      for (const [index, guide] of sampleGuides.entries())
-        await fetchJson('/api/guides', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Idempotency-Key': `study-sample-v2-${index}` },
-          body: JSON.stringify(guide),
-        });
-      filter('');
-      setSubject('');
-      setSearch('');
-      setRevision((value) => value + 1);
-    } catch (error) {
-      setSeedError(error instanceof Error ? error.message : 'Unable to load samples.');
-    } finally {
-      setSeeding(false);
-    }
-  }
-  const inProgress = counts ? counts.pending + counts.queued + counts.processing + counts.retrying : null;
-  const offline = guides.error || metrics.error || config.error;
+const viewNames: Record<View, string> = {
+  applications: 'All applications',
+  upcoming: 'Upcoming',
+  archive: 'Archive',
+};
+function NextStep({ application }: { application: Application }) {
+  const due = nextDue(application);
+  const today = localToday();
+  const late = due && due.date < today;
   return (
-    <div className="app-shell">
-      <aside className="sidebar">
-        <a className="brand" href="/" aria-label="StudyFlow home">
-          <span className="brand-mark">
-            <Activity size={20} />
-          </span>
-          StudyFlow<span className="brand-period">.</span>
-        </a>
-        <div className="workspace">
-          <span className="workspace-avatar">S</span>
-          <div>
-            <strong>My study space</strong>
-            <span>Local project</span>
-          </div>
-        </div>
-        <p className="eyebrow nav-label">WORKSPACE</p>
-        <nav aria-label="Guide views">
-          <button className={status === '' ? 'nav-item active' : 'nav-item'} onClick={() => filter('')}>
-            <Inbox size={18} />
-            All guides<span>{metrics.value?.total ?? '—'}</span>
-          </button>
-          <button
-            className={status === 'processing' ? 'nav-item active' : 'nav-item'}
-            onClick={() => filter('processing')}
-          >
-            <Activity size={18} />
-            Processing<span>{counts?.processing ?? '—'}</span>
-          </button>
-          <button
-            className={status === 'completed' ? 'nav-item active' : 'nav-item'}
-            onClick={() => filter('completed')}
-          >
-            <CheckCheck size={18} />
-            Completed<span>{counts?.completed ?? '—'}</span>
-          </button>
-          <button
-            className={status === 'failed' ? 'nav-item active' : 'nav-item'}
-            onClick={() => filter('failed')}
-          >
-            <TriangleAlert size={18} />
-            Needs attention<span>{counts?.failed ?? '—'}</span>
-          </button>
-        </nav>
-        <div className="sidebar-note">
-          <span className="note-icon">
-            <CircleHelp size={18} />
-          </span>
-          <strong>Practice before peeking.</strong>
-          <p>
-            Try each question before revealing the answer. Return to your course notes to check the details.
-          </p>
-        </div>
-        <div className="sidebar-bottom">
-          <span className="avatar">SF</span>
-          <div>
-            <strong>StudyFlow project</strong>
-            <span>RabbitMQ + Gemini</span>
-          </div>
-          <span className="version">v0.1</span>
-        </div>
-      </aside>
-      <main className="main-content">
-        <div className="topline">
-          <span>
-            Workspace <span className="slash">/</span> Study library
-          </span>
-          <span className={`connection ${offline ? 'offline' : ''}`}>
-            <span />
-            {offline ? 'Connection interrupted' : 'Updates every 2 seconds'}
-          </span>
-        </div>
-        <header className="page-heading">
-          <div>
-            <p className="eyebrow">MAKE ROOM FOR UNDERSTANDING.</p>
-            <h1>Study library</h1>
-            <p>Turn your notes into concepts you understand.</p>
-          </div>
-          <button className="button primary" onClick={() => setCreating(true)}>
-            <Plus size={18} />
-            New guide
-          </button>
-        </header>
-        <div className="mode-banner">
-          <span className="mode-dot" />
-          <strong>
-            {config.value?.provider === 'gemini'
-              ? 'Gemini mode'
-              : config.value
-                ? 'Mock AI mode'
-                : 'Connecting…'}
-          </strong>
-          <span>
-            {config.value?.transport === 'preview'
-              ? 'Fixed examples and study templates. No live AI calls.'
-              : config.value
-                ? 'Your requests are saved and processed in the background.'
-                : 'Loading application configuration.'}
-          </span>
-          {config.value?.provider === 'mock' && (
-            <button
-              className="text-button"
-              disabled={seeding}
-              onClick={() => {
-                void loadSamples();
-              }}
-            >
-              <ArrowDownToLine size={14} />
-              {seeding ? 'Loading…' : 'Load sample guides'}
-            </button>
-          )}
-        </div>
-        {(offline || seedError) && (
-          <div role="alert" className="error-box">
-            {seedError || `Updates are paused. ${offline} The page will retry automatically.`}
-          </div>
-        )}
-        <section className="metrics-row" aria-label="Queue overview">
-          <div className="metric">
-            <span>
-              Total guides
-              <Inbox size={16} />
-            </span>
-            <strong>{metrics.value?.total ?? '—'}</strong>
-            <small>All saved requests</small>
-          </div>
-          <div className="metric">
-            <span>
-              In progress
-              <Activity size={16} />
-            </span>
-            <strong>
-              {inProgress ?? '—'}
-              <i className="live-pip" />
-            </strong>
-            <small>Waiting, processing, or retrying</small>
-          </div>
-          <div className="metric">
-            <span>
-              Completed
-              <CheckCheck size={16} />
-            </span>
-            <strong>{counts?.completed ?? '—'}</strong>
-            <small>Ready to study</small>
-          </div>
-          <div className="metric">
-            <span>
-              Typical turnaround
-              <ArrowUpRight size={16} />
-            </span>
-            <strong>{duration(metrics.value?.p50CompletionMs)}</strong>
-            <small>Median time to a saved guide</small>
-          </div>
-        </section>
-        <div className="inbox-layout">
-          <section className="guide-panel" aria-label="Study library">
-            <div className="list-heading">
-              <h2>
-                {status === 'failed'
-                  ? 'Needs attention'
-                  : status
-                    ? `${status[0].toUpperCase()}${status.slice(1)} guides`
-                    : 'All guides'}
-                <span>{guides.value?.total ?? '—'}</span>
-              </h2>
-              <span className="small muted">Newest first</span>
-            </div>
-            <div className="list-filters">
-              <label className="search-box">
-                <Search size={16} />
-                <input
-                  type="search"
-                  aria-label="Search guides"
-                  placeholder="Search guides…"
-                  value={search}
-                  onChange={(event) => {
-                    setSearch(event.target.value);
-                    setPage(1);
-                    setSelected(null);
-                  }}
-                />
-              </label>
-              <div className="filter-row">
-                <select
-                  aria-label="Filter by status"
-                  value={status}
-                  onChange={(event) => filter(event.target.value)}
-                >
-                  <option value="">All statuses</option>
-                  {['pending', 'queued', 'processing', 'retrying', 'completed', 'failed'].map((value) => (
-                    <option key={value} value={value}>
-                      {value[0].toUpperCase() + value.slice(1)}
-                    </option>
-                  ))}
-                </select>
-                <select
-                  aria-label="Filter by subject"
-                  value={subject}
-                  onChange={(event) => {
-                    setSubject(event.target.value);
-                    setPage(1);
-                    setSelected(null);
-                  }}
-                >
-                  <option value="">All subjects</option>
-                  {subjects.map((value) => (
-                    <option key={value} value={value}>
-                      {subjectLabels[value]}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            </div>
-            {guides.loading ? (
-              <div className="list-loading" role="status">
-                <div className="loading-line" />
-                <div className="loading-line" />
-                <div className="loading-line" />
-                <p>Loading guides…</p>
-              </div>
-            ) : guides.value?.items.length ? (
-              <ul className="guide-list">
-                {guides.value.items.map((guide) => (
-                  <li key={guide.id}>
-                    <button
-                      className={`guide-row ${guide.id === selectedId ? 'selected' : ''}`}
-                      aria-pressed={guide.id === selectedId}
-                      onClick={() => setSelected(guide.id)}
-                    >
-                      <div className="guide-row-top">
-                        <span className="mono">SF-{guide.id.slice(0, 6).toUpperCase()}</span>
-                        <time dateTime={guide.createdAt}>{timeLabel(guide.createdAt)}</time>
-                      </div>
-                      <h3>{guide.title}</h3>
-                      <p>{guide.body}</p>
-                      <div className="guide-row-bottom">
-                        <StatusBadge status={guide.status} />
-                        <span className="list-subject">{subjectLabels[guide.subject]}</span>
-                        <span className="attempt-count">
-                          {guide.attempts} {guide.attempts === 1 ? 'attempt' : 'attempts'}
-                        </span>
-                      </div>
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            ) : (
-              <div className="empty-state list-empty">
-                <Inbox size={30} />
-                <h3>{guides.error ? 'Library unavailable' : 'No guides here yet'}</h3>
-                <p>
-                  {guides.error
-                    ? 'Check the API and database, then try again.'
-                    : status || subject || query
-                      ? 'Try a different filter or search.'
-                      : 'Create your first guide or load the samples to watch the workflow.'}
-                </p>
-                <button className="button secondary" onClick={() => setCreating(true)}>
-                  <Plus size={16} />
-                  Create a guide
-                </button>
-              </div>
-            )}
-            <div className="pagination">
-              <span>
-                {guides.value?.total ? `Page ${page} of ${Math.ceil(guides.value.total / 12)}` : '0 guides'}
-              </span>
-              <div>
-                <button
-                  className="icon-button"
-                  aria-label="Previous page"
-                  disabled={page === 1}
-                  onClick={() => {
-                    setPage((value) => value - 1);
-                    setSelected(null);
-                  }}
-                >
-                  <ChevronLeft size={17} />
-                </button>
-                <button
-                  className="icon-button"
-                  aria-label="Next page"
-                  disabled={!guides.value || page * 12 >= guides.value.total}
-                  onClick={() => {
-                    setPage((value) => value + 1);
-                    setSelected(null);
-                  }}
-                >
-                  <ChevronRight size={17} />
-                </button>
-              </div>
-            </div>
-          </section>
-          <GuideDetail key={selectedId} guide={detail.value} loading={detail.loading} error={detail.error} />
-        </div>
-        <footer className="page-footer">
-          <span>A little clarity, one topic at a time.</span>
-          <span>
-            {config.value?.provider === 'mock'
-              ? 'Mock examples · not generated from your notes'
-              : 'AI-generated · verify against your course material'}
-          </span>
-        </footer>
-      </main>
-      {creating && (
-        <NewGuide
-          config={config.value}
-          onClose={() => setCreating(false)}
-          onCreated={(id) => {
-            filter('');
-            setSubject('');
-            setSearch('');
-            setSelected(id);
-            setRevision((value) => value + 1);
-          }}
-        />
+    <div className="next-step">
+      <span>{due?.label ?? (application.nextAction || 'No next step yet')}</span>
+      {due ? (
+        <span className={`due ${late ? 'overdue' : due.date === today ? 'today' : ''}`}>
+          <CalendarDays size={12} />
+          {late
+            ? `Overdue · ${dateLabel(due.date, true)}`
+            : due.date === today
+              ? 'Today'
+              : dateLabel(due.date, true)}
+        </span>
+      ) : (
+        <span className="secondary">
+          {application.archived
+            ? 'Archived'
+            : ['rejected', 'withdrawn'].includes(application.status)
+              ? 'Closed'
+              : 'Add a date when you’re ready'}
+        </span>
       )}
     </div>
+  );
+}
+export function App() {
+  const [view, setView] = useState<View>('applications');
+  const [search, setSearch] = useState('');
+  const q = useDebounced(search);
+  const [status, setStatus] = useState('');
+  const [page, setPage] = useState(1);
+  const [refresh, setRefresh] = useState(0);
+  const [editor, setEditor] = useState<{ id: string | null } | null>(null);
+  const [notice, setNotice] = useState('');
+  const [actionError, setActionError] = useState('');
+  const [updating, setUpdating] = useState<string | null>(null);
+  const [exporting, setExporting] = useState(false);
+  const addButton = useRef<HTMLButtonElement>(null);
+  const query = new URLSearchParams({
+    view,
+    q,
+    page: String(page),
+    pageSize: '20',
+    ...(status ? { status } : {}),
+  });
+  const result = usePoll<ApplicationList>(`/api/applications?${query}`, refresh);
+  const summary = usePoll<Summary>('/api/summary', refresh);
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(''), 5000);
+    return () => clearTimeout(timer);
+  }, [notice]);
+  useEffect(() => {
+    if (result.value && page > 1 && !result.value.items.length)
+      setPage(Math.max(1, Math.ceil(result.value.total / 20)));
+  }, [result.value, page]);
+  function switchView(value: View) {
+    setView(value);
+    setPage(1);
+    setStatus('');
+    setSearch('');
+  }
+  function updated(message: string) {
+    setEditor(null);
+    setRefresh((value) => value + 1);
+    setNotice(message);
+    setActionError('');
+    // The edited row may disappear after archive/delete; keep keyboard focus usable.
+    requestAnimationFrame(() => {
+      addButton.current?.focus();
+    });
+  }
+  async function changeStatus(application: Application, next: Status) {
+    setUpdating(application.id);
+    setActionError('');
+    try {
+      await fetchJson(`/api/applications/${application.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          status: next,
+          version: application.version,
+          ...(next === 'applied' && !application.appliedDate ? { appliedDate: localToday() } : {}),
+        }),
+      });
+      setRefresh((value) => value + 1);
+      setNotice(`Moved ${application.company} to ${statusLabels[next]}.`);
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Could not change the status.');
+      setRefresh((value) => value + 1);
+    } finally {
+      setUpdating(null);
+    }
+  }
+  async function exportCsv() {
+    setExporting(true);
+    setActionError('');
+    try {
+      const response = await fetch(`/api/applications/export.csv?${query}`, {
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!response.ok) throw new Error('Could not export applications. Please try again.');
+      const url = URL.createObjectURL(await response.blob());
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = 'internship-applications.csv';
+      link.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setNotice('CSV downloaded for the current view and filters.');
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : 'Export failed.');
+    } finally {
+      setExporting(false);
+    }
+  }
+  const items = result.value?.items ?? [];
+  const filtered = Boolean(q || status);
+  return (
+    <>
+      <a href="#main" className="skip-link">
+        Skip to applications
+      </a>
+      <header className="topbar">
+        <div className="topbar-inner">
+          <a href="/" className="brand" aria-label="Internship Log home">
+            <span className="brand-mark">
+              <BriefcaseBusiness size={19} strokeWidth={1.7} />
+            </span>
+            Internship <span className="brand-light">Log</span>
+          </a>
+          <span className="workspace-label">
+            <span />
+            Personal workspace
+          </span>
+        </div>
+      </header>
+      <main id="main" className="workspace">
+        <section className="page-heading">
+          <div>
+            <span className="eyebrow">A PLACE FOR YOUR NEXT CHAPTER</span>
+            <h1>
+              Your applications<span className="title-dot">.</span>
+            </h1>
+            <p>A simple space to keep opportunities moving.</p>
+          </div>
+          <div className="heading-actions">
+            <button
+              className="button export-button"
+              onClick={() => {
+                void exportCsv();
+              }}
+              disabled={exporting || result.loading}
+            >
+              <ArrowDownToLine size={16} />
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+            <button ref={addButton} className="primary" onClick={() => setEditor({ id: null })}>
+              <Plus size={18} />
+              Add application
+            </button>
+          </div>
+        </section>
+        <section className="summary-strip" aria-label="Application summary">
+          <div>
+            <strong>{summary.value?.total ?? '—'}</strong>
+            <span>applications</span>
+          </div>
+          <div>
+            <strong>{summary.value?.active ?? '—'}</strong>
+            <span>in progress</span>
+          </div>
+          <div>
+            <strong>{summary.value?.interviews ?? '—'}</strong>
+            <span>interviews</span>
+          </div>
+          <div>
+            <strong className="offer-count">{summary.value?.offers ?? '—'}</strong>
+            <span>offers</span>
+          </div>
+          <p>
+            Small steps. New possibilities.
+            <ArrowUpRight size={18} />
+          </p>
+        </section>
+        <nav className="view-tabs" aria-label="Application views">
+          {(Object.keys(viewNames) as View[]).map((value) => (
+            <button
+              key={value}
+              aria-current={view === value ? 'page' : undefined}
+              onClick={() => switchView(value)}
+            >
+              {viewNames[value]}
+              {value === 'applications' && summary.value ? (
+                <span>{summary.value.total}</span>
+              ) : value === 'archive' && summary.value?.archived ? (
+                <span>{summary.value.archived}</span>
+              ) : null}
+            </button>
+          ))}
+        </nav>
+        <section className="application-section" aria-label={viewNames[view]}>
+          <div className="filter-row">
+            <div className="search-field">
+              <Search size={17} />
+              <input
+                type="search"
+                aria-label="Search applications"
+                placeholder="Search company, role, or location…"
+                value={search}
+                onChange={(event) => {
+                  setSearch(event.target.value);
+                  setPage(1);
+                }}
+              />
+              {search && (
+                <button
+                  className="icon-button"
+                  aria-label="Clear search"
+                  onClick={() => {
+                    setSearch('');
+                    setPage(1);
+                  }}
+                >
+                  <X size={16} />
+                </button>
+              )}
+            </div>
+            <label className="status-filter">
+              <span>Status</span>
+              <select
+                aria-label="Filter by status"
+                value={status}
+                onChange={(event) => {
+                  setStatus(event.target.value);
+                  setPage(1);
+                }}
+              >
+                <option value="">All statuses</option>
+                {statuses.map((item) => (
+                  <option value={item} key={item}>
+                    {statusLabels[item]}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          {view === 'upcoming' && (
+            <p className="view-hint">
+              <CalendarDays size={15} />
+              Next actions and deadlines for saved roles, earliest first. Overdue items stay here until you
+              update them.
+            </p>
+          )}
+          {view === 'archive' && (
+            <p className="view-hint">
+              Your archived applications are saved here. Open one and uncheck “Move to archive” to restore it.
+            </p>
+          )}
+          {(result.error || summary.error || actionError) && (
+            <div className="error list-error" role="alert">
+              {actionError || result.error || summary.error}
+              <button
+                className="text-button"
+                onClick={() => {
+                  setActionError('');
+                  setRefresh((value) => value + 1);
+                }}
+              >
+                Refresh
+              </button>
+            </div>
+          )}
+          {result.loading ? (
+            <div className="empty-state" role="status">
+              <span className="loading-line" />
+              <p>Loading your applications…</p>
+            </div>
+          ) : items.length ? (
+            <>
+              <div className="table-wrap">
+                <table className="applications-table">
+                  <thead>
+                    <tr>
+                      <th scope="col">Company & role</th>
+                      <th scope="col">Status</th>
+                      <th scope="col">Applied</th>
+                      <th scope="col">Next step</th>
+                      <th scope="col">
+                        <span className="sr-only">Details</span>
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {items.map((application) => (
+                      <tr key={application.id}>
+                        <td className="company-cell">
+                          <span className="company-avatar" aria-hidden="true">
+                            {application.company.slice(0, 1).toUpperCase()}
+                          </span>
+                          <div>
+                            <button
+                              className="company-button"
+                              onClick={() => setEditor({ id: application.id })}
+                            >
+                              {application.company}
+                            </button>
+                            <span className="role-label">{application.role}</span>
+                            <span className="location-label">
+                              {application.location || 'Location not added'}
+                            </span>
+                          </div>
+                        </td>
+                        <td data-label="Status" className="stage-cell">
+                          <div className={`stage stage-${application.status}`}>
+                            <span className="stage-dot" />
+                            <select
+                              aria-label={`Status for ${application.company}`}
+                              value={application.status}
+                              disabled={Boolean(updating)}
+                              onChange={(event) => {
+                                void changeStatus(application, event.target.value as Status);
+                              }}
+                            >
+                              {statuses.map((item) => (
+                                <option key={item} value={item}>
+                                  {statusLabels[item]}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                        </td>
+                        <td data-label="Applied" className="applied-cell">
+                          {dateLabel(application.appliedDate, true)}
+                        </td>
+                        <td data-label="Next step" className="next-cell">
+                          <NextStep application={application} />
+                        </td>
+                        <td className="open-cell">
+                          <button
+                            className="icon-button"
+                            aria-label={`Edit ${application.company} application`}
+                            onClick={() => setEditor({ id: application.id })}
+                          >
+                            <ArrowUpRight size={18} />
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="table-footer">
+                <span>
+                  {(page - 1) * 20 + 1}–{Math.min(page * 20, result.value!.total)} of {result.value!.total}{' '}
+                  {result.value!.total === 1 ? 'application' : 'applications'}
+                </span>
+                <div className="pagination">
+                  <button
+                    className="icon-button"
+                    disabled={page === 1}
+                    aria-label="Previous page"
+                    onClick={() => setPage((value) => value - 1)}
+                  >
+                    <ChevronLeft size={17} />
+                  </button>
+                  <span>Page {page}</span>
+                  <button
+                    className="icon-button"
+                    disabled={page * 20 >= result.value!.total}
+                    aria-label="Next page"
+                    onClick={() => setPage((value) => value + 1)}
+                  >
+                    <ChevronRight size={17} />
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : (
+            !result.error && (
+              <div className="empty-state">
+                <span className="empty-icon">
+                  {view === 'upcoming' ? (
+                    <CalendarDays size={27} strokeWidth={1.4} />
+                  ) : (
+                    <BriefcaseBusiness size={27} strokeWidth={1.4} />
+                  )}
+                </span>
+                <h2>
+                  {filtered
+                    ? 'No matches this time.'
+                    : view === 'archive'
+                      ? 'A little room to move on.'
+                      : view === 'upcoming'
+                        ? 'A clear schedule.'
+                        : 'Every opportunity starts somewhere.'}
+                </h2>
+                <p>
+                  {filtered
+                    ? 'Try another search or clear your filters.'
+                    : view === 'archive'
+                      ? 'Archived applications will live here, with all your notes intact.'
+                      : view === 'upcoming'
+                        ? 'Add a deadline or a date for your next action to see it here.'
+                        : 'Save a role you like. Track your progress. Keep the next step in sight.'}
+                </p>
+                {filtered ? (
+                  <button
+                    className="button"
+                    onClick={() => {
+                      setSearch('');
+                      setStatus('');
+                      setPage(1);
+                    }}
+                  >
+                    Clear filters
+                  </button>
+                ) : view === 'applications' ? (
+                  <button className="text-button empty-action" onClick={() => setEditor({ id: null })}>
+                    Add your first application
+                    <ArrowRight size={16} />
+                  </button>
+                ) : null}
+              </div>
+            )
+          )}
+        </section>
+        <footer className="page-footer">
+          <span>One application at a time.</span>
+          <span>Saved on this app’s server · Export a CSV to keep a copy.</span>
+        </footer>
+      </main>
+      <div className={`toast ${notice ? 'visible' : ''}`} role="status" aria-live="polite">
+        {notice && (
+          <>
+            <Check size={16} />
+            {notice}
+          </>
+        )}
+      </div>
+      {editor && <ApplicationEditor id={editor.id} onClose={() => setEditor(null)} onSaved={updated} />}
+    </>
   );
 }

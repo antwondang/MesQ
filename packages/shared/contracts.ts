@@ -1,122 +1,121 @@
 import { z } from 'zod';
 
-export const subjects = ['computer-science', 'mathematics', 'science', 'other'] as const;
-export const subjectLabels: Record<(typeof subjects)[number], string> = {
-  'computer-science': 'Computer science',
-  mathematics: 'Mathematics',
-  science: 'Science',
-  other: 'Other',
+export const statuses = [
+  'saved',
+  'applied',
+  'assessment',
+  'interview',
+  'offer',
+  'rejected',
+  'withdrawn',
+] as const;
+export type Status = (typeof statuses)[number];
+export const statusLabels: Record<Status, string> = {
+  saved: 'Saved',
+  applied: 'Applied',
+  assessment: 'Assessment',
+  interview: 'Interview',
+  offer: 'Offer',
+  rejected: 'Rejected',
+  withdrawn: 'Withdrawn',
 };
-export const statuses = ['pending', 'queued', 'processing', 'retrying', 'completed', 'failed'] as const;
-export const demoScenarios = ['normal', 'transient', 'permanent', 'exhausted', 'slow'] as const;
-export const guideInputSchema = z
+export const dateSchema = z
+  .string()
+  .regex(/^\d{4}-\d{2}-\d{2}$/)
+  .refine((value) => {
+    const date = new Date(`${value}T12:00:00Z`);
+    return !Number.isNaN(date.valueOf()) && date.toISOString().slice(0, 10) === value;
+  }, 'Enter a valid calendar date.');
+const optionalDate = dateSchema.nullable();
+const applicationFields = z
   .object({
-    title: z.string().trim().min(2).max(160),
-    mode: z.enum(['notes', 'topic']),
-    subject: z.enum(subjects).default('other'),
-    body: z.string().trim().max(8000).default(''),
-    demoScenario: z.enum(demoScenarios).default('normal'),
-  })
-  .strict()
-  .refine((input) => input.mode !== 'notes' || input.body.length >= 20, {
-    message: 'Paste at least 20 characters of notes.',
-    path: ['body'],
-  });
-const text = (max: number) => z.string().trim().min(1).max(max);
-export const studyResultSchema = z
-  .object({
-    summary: text(1500),
-    concepts: z
-      .array(
-        z
-          .object({ term: text(120), explanation: text(1200), basis: z.enum(['source', 'additional']) })
-          .strict(),
-      )
-      .min(3)
-      .max(6),
-    questions: z
-      .array(z.object({ question: text(600), answer: text(1000), explanation: text(1000) }).strict())
-      .min(3)
-      .max(5),
-    gaps: z.array(text(500)).max(5),
-  })
-  .strict();
-export const messageSchema = z
-  .object({
-    schemaVersion: z.literal(2),
-    guideId: z.uuid(),
-    generation: z.number().int().positive(),
+    company: z.string().trim().min(1, 'Company is required.').max(120),
+    role: z.string().trim().min(1, 'Role is required.').max(160),
+    location: z.string().trim().max(160),
+    url: z
+      .string()
+      .trim()
+      .max(2000)
+      .refine((value) => {
+        if (!value) return true;
+        try {
+          return ['https:', 'http:'].includes(new URL(value).protocol);
+        } catch {
+          return false;
+        }
+      }, 'Use a complete http:// or https:// job link.'),
+    status: z.enum(statuses),
+    appliedDate: optionalDate,
+    deadline: optionalDate,
+    nextAction: z.string().trim().max(240),
+    nextActionDate: optionalDate,
+    notes: z.string().trim().max(12000),
+    archived: z.boolean(),
   })
   .strict();
-export const listQuerySchema = z
-  .object({
-    page: z.coerce.number().int().min(1).max(100000).default(1),
-    pageSize: z.coerce.number().int().min(1).max(100).default(20),
-    status: z.enum(statuses).optional(),
-    subject: z.enum(subjects).optional(),
-    q: z.string().trim().max(100).default(''),
-  })
+export const applicationInputSchema = applicationFields.extend({
+  location: applicationFields.shape.location.default(''),
+  url: applicationFields.shape.url.default(''),
+  status: applicationFields.shape.status.default('saved'),
+  appliedDate: optionalDate.default(null),
+  deadline: optionalDate.default(null),
+  nextAction: applicationFields.shape.nextAction.default(''),
+  nextActionDate: optionalDate.default(null),
+  notes: applicationFields.shape.notes.default(''),
+  archived: applicationFields.shape.archived.default(false),
+});
+// Patch fields intentionally have no defaults: changing a stage must retain notes and dates.
+export const updateSchema = applicationFields
+  .partial()
+  .extend({ version: z.number().int().positive() })
   .strict();
-export type GuideInput = z.infer<typeof guideInputSchema>;
-export type StudyResult = z.infer<typeof studyResultSchema>;
-export type JobMessage = z.infer<typeof messageSchema>;
+export const listQuerySchema = z.object({
+  q: z.string().trim().max(200).default(''),
+  status: z.enum(statuses).optional(),
+  view: z.enum(['applications', 'upcoming', 'archive']).default('applications'),
+  page: z.coerce.number().int().min(1).max(100000).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type ApplicationInput = z.infer<typeof applicationInputSchema>;
+export type ApplicationPatch = z.infer<typeof updateSchema>;
 export type ListQuery = z.infer<typeof listQuerySchema>;
-export type JobStatus = (typeof statuses)[number];
-export type ProviderName = 'mock' | 'gemini';
-export interface Guide {
+export type View = ListQuery['view'];
+export interface Application extends ApplicationInput {
   id: string;
-  title: string;
-  body: string;
-  mode: GuideInput['mode'];
-  subject: GuideInput['subject'];
-  demoScenario: GuideInput['demoScenario'];
-  status: JobStatus;
-  generation: number;
-  attempts: number;
-  crashCount: number;
-  result: StudyResult | null;
-  provider: ProviderName | null;
-  model: string | null;
+  version: number;
   createdAt: string;
   updatedAt: string;
-  completedAt: string | null;
-  firstStartedAt: string | null;
-  nextAttemptAt: string | null;
-  lastError: string | null;
 }
-export interface Attempt {
+export interface Activity {
   id: string;
-  generation: number;
-  fence: number;
-  workerId: string;
-  startedAt: string;
-  endedAt: string | null;
-  outcome: string;
-  errorCode: string | null;
-  durationMs: number | null;
-  tokens: number | null;
+  description: string;
+  createdAt: string;
 }
-export interface GuideDetail extends Guide {
-  history: Attempt[];
+export interface ApplicationDetail extends Application {
+  history: Activity[];
 }
-export interface GuidePage {
-  items: Guide[];
+export interface ApplicationList {
+  items: Application[];
   total: number;
   page: number;
   pageSize: number;
 }
-export interface AppConfig {
-  provider: ProviderName;
-  model: string;
-  transport: 'rabbitmq' | 'preview';
-  maxAttempts: number;
-}
-export interface Metrics {
-  counts: Record<JobStatus, number>;
+export interface Summary {
   total: number;
-  pendingPublications: number;
-  p50CompletionMs: number | null;
-  p95CompletionMs: number | null;
-  averageProcessingMs: number | null;
-  subjects: { subject: string; count: number }[];
+  active: number;
+  interviews: number;
+  offers: number;
+  archived: number;
+}
+export function localToday(now = new Date()): string {
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+}
+export function nextDue(application: ApplicationInput): { date: string; label: string } | null {
+  if (application.archived || ['rejected', 'withdrawn'].includes(application.status)) return null;
+  const dates: { date: string; label: string }[] = [];
+  if (application.nextActionDate)
+    dates.push({ date: application.nextActionDate, label: application.nextAction || 'Next action' });
+  if (application.deadline && application.status === 'saved')
+    dates.push({ date: application.deadline, label: 'Application deadline' });
+  return dates.sort((a, b) => a.date.localeCompare(b.date))[0] ?? null;
 }

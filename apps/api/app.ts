@@ -3,12 +3,21 @@ import { randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { z } from 'zod';
-import { listQuerySchema, guideInputSchema, type AppConfig } from '../../packages/shared/contracts.js';
+import { listQuerySchema, applicationInputSchema, updateSchema } from '../../packages/shared/contracts.js';
 import type { Database } from '../../packages/server/database.js';
-import { createGuide, getMetrics, getGuide, listGuides } from '../../packages/server/repository.js';
-import { log, type Config } from '../../packages/server/config.js';
+import {
+  createApplication,
+  getSummary,
+  getApplication,
+  listApplications,
+  updateApplication,
+  deleteApplication,
+  exportApplications,
+  RepositoryError,
+} from '../../packages/server/repository.js';
+import { log } from '../../packages/server/config.js';
 
-export function createApp(db: Database, config: Config, transport: AppConfig['transport'] = 'rabbitmq') {
+export function createApp(db: Database) {
   const app = express();
   app.disable('x-powered-by');
   app.use((_req, res, next) => {
@@ -20,18 +29,15 @@ export function createApp(db: Database, config: Config, transport: AppConfig['tr
     res.setHeader('Cache-Control', 'no-store');
     next();
   });
-  app.use(express.json({ limit: '48kb', strict: true }));
+  app.use(express.json({ limit: '64kb', strict: true }));
   app.use((req, res, next) => {
-    if (req.method === 'POST' && req.headers.origin) {
+    if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(req.method) && req.headers.origin) {
       try {
-        if (new URL(req.headers.origin).host !== req.get('host')) {
-          res
-            .status(403)
-            .json({ error: { code: 'origin_rejected', message: 'Cross-origin writes are not allowed.' } });
-          return;
-        }
+        if (new URL(req.headers.origin).host !== req.get('host')) throw new Error('origin');
       } catch {
-        res.status(403).json({ error: { code: 'origin_rejected', message: 'Invalid request origin.' } });
+        res
+          .status(403)
+          .json({ error: { code: 'origin_rejected', message: 'Cross-origin writes are not allowed.' } });
         return;
       }
     }
@@ -39,49 +45,38 @@ export function createApp(db: Database, config: Config, transport: AppConfig['tr
   });
   app.get('/health', async (_req, res) => {
     await db.query('SELECT 1');
-    res.json({ status: 'ok', database: 'connected', transport });
+    res.json({ status: 'ok', app: 'Internship Log', database: 'connected' });
   });
-  app.get('/api/config', (_req, res) => {
-    const publicConfig: AppConfig = {
-      provider: config.AI_PROVIDER,
-      model: config.AI_PROVIDER === 'mock' ? 'study-examples-v2' : config.GEMINI_MODEL,
-      transport,
-      maxAttempts: config.MAX_ATTEMPTS,
-    };
-    res.json(publicConfig);
+  app.get('/api/summary', async (_req, res) => {
+    res.json(await getSummary(db));
   });
-  app.post('/api/guides', async (req, res) => {
-    const input = guideInputSchema.parse(req.body);
-    if (config.AI_PROVIDER === 'gemini' && input.demoScenario !== 'normal') {
-      res.status(400).json({
-        error: {
-          code: 'demo_unavailable',
-          message: 'Failure simulations are available only in mock mode.',
-        },
-      });
-      return;
-    }
+  app.get('/api/applications/export.csv', async (req, res) => {
+    const csv = await exportApplications(db, listQuerySchema.parse(req.query));
+    res.setHeader('Content-Disposition', 'attachment; filename="internship-applications.csv"');
+    res.type('text/csv').send(csv);
+  });
+  app.get('/api/applications', async (req, res) => {
+    res.json(await listApplications(db, listQuerySchema.parse(req.query)));
+  });
+  app.post('/api/applications', async (req, res) => {
+    const input = applicationInputSchema.parse(req.body);
     const key = z
       .string()
       .regex(/^[a-zA-Z0-9._:-]{1,128}$/)
       .parse(req.get('Idempotency-Key') ?? randomUUID());
-    const guide = await createGuide(db, input, key);
-    const statusUrl = `/api/guides/${guide.id}`;
-    res.status(202).location(statusUrl).json({ id: guide.id, status: guide.status, statusUrl });
+    const application = await createApplication(db, input, key);
+    res.status(201).location(`/api/applications/${application.id}`).json(application);
   });
-  app.get('/api/guides', async (req, res) => {
-    res.json(await listGuides(db, listQuerySchema.parse(req.query)));
+  app.get('/api/applications/:id', async (req, res) => {
+    res.json(await getApplication(db, z.uuid().parse(req.params.id)));
   });
-  app.get('/api/guides/:id', async (req, res) => {
-    const guide = await getGuide(db, z.uuid().parse(req.params.id));
-    if (!guide) {
-      res.status(404).json({ error: { code: 'not_found', message: 'Guide not found.' } });
-      return;
-    }
-    res.json(guide);
+  app.patch('/api/applications/:id', async (req, res) => {
+    res.json(await updateApplication(db, z.uuid().parse(req.params.id), updateSchema.parse(req.body)));
   });
-  app.get('/api/metrics', async (_req, res) => {
-    res.json(await getMetrics(db));
+  app.delete('/api/applications/:id', async (req, res) => {
+    const { version } = z.object({ version: z.number().int().positive() }).strict().parse(req.body);
+    await deleteApplication(db, z.uuid().parse(req.params.id), version);
+    res.status(204).end();
   });
   app.use('/api', (_req, res) => {
     res.status(404).json({ error: { code: 'not_found', message: 'Endpoint not found.' } });
@@ -98,19 +93,16 @@ export function createApp(db: Database, config: Config, transport: AppConfig['tr
       res.status(400).json({
         error: {
           code: 'validation_error',
-          message: 'Check the input lengths, allowed values, and required fields.',
+          message: error.issues[0]?.message ?? 'Check the application fields.',
           fields: error.issues.map((issue) => ({ path: issue.path.join('.'), message: issue.message })),
         },
       });
       return;
     }
-    if (error instanceof Error && error.message === 'idempotency_conflict') {
-      res.status(409).json({
-        error: {
-          code: 'idempotency_conflict',
-          message: 'This request key was already used for different content.',
-        },
-      });
+    if (error instanceof RepositoryError) {
+      res
+        .status(error.code === 'not_found' ? 404 : 409)
+        .json({ error: { code: error.code, message: error.message } });
       return;
     }
     const status = Number((error as { status?: number })?.status);
@@ -122,10 +114,7 @@ export function createApp(db: Database, config: Config, transport: AppConfig['tr
     }
     log('api_error');
     res.status(503).json({
-      error: {
-        code: 'service_unavailable',
-        message: 'The service is temporarily unavailable. Retry with the same request key.',
-      },
+      error: { code: 'service_unavailable', message: 'Could not reach the database. Please try again.' },
     });
   };
   app.use(errors);

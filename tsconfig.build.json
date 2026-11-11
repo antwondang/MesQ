@@ -1,6 +1,11 @@
 {
   "extends": "./tsconfig.json",
-  "compilerOptions": { "noEmit": false, "outDir": "dist", "rootDir": ".", "sourceMap": true },
-  "include": ["apps/api", "apps/worker", "packages", "scripts"],
+  "compilerOptions": {
+    "noEmit": false,
+    "outDir": "dist",
+    "rootDir": ".",
+    "sourceMap": true
+  },
+  "include": ["apps/api", "packages", "scripts"],
   "exclude": ["node_modules", "dist", "tests"]
 }

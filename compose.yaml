@@ -1,16 +1,14 @@
 x-app: &app
   build: .
-  image: triageflow:local
+  image: internship-log:local
   init: true
-  env_file:
-    - .env
-  environment: &app-environment
+  environment:
+    # Keep these local database names to reuse existing installations safely.
     DATABASE_URL: postgres://triageflow:triageflow_dev@postgres:5432/triageflow
-    RABBITMQ_URL: amqp://triageflow:triageflow_dev@rabbitmq:5672
     HOST: 0.0.0.0
     PORT: 3000
   restart: unless-stopped
-  stop_grace_period: 40s
+  stop_grace_period: 15s
 
 services:
   postgres:
@@ -27,23 +25,6 @@ services:
       test: ['CMD-SHELL', 'pg_isready -U triageflow -d triageflow']
       interval: 5s
       timeout: 5s
-      retries: 20
-    restart: unless-stopped
-  rabbitmq:
-    image: rabbitmq:4.2-management
-    hostname: triageflow-rabbitmq
-    environment:
-      RABBITMQ_DEFAULT_USER: triageflow
-      RABBITMQ_DEFAULT_PASS: triageflow_dev
-    ports:
-      - '127.0.0.1:5672:5672'
-      - '127.0.0.1:15672:15672'
-    volumes:
-      - rabbitmq-data:/var/lib/rabbitmq
-    healthcheck:
-      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
-      interval: 5s
-      timeout: 10s
       retries: 20
     restart: unless-stopped
   migrate:
@@ -71,23 +52,5 @@ services:
       interval: 10s
       timeout: 5s
       retries: 10
-  relay:
-    <<: *app
-    command: ['node', 'dist/apps/worker/relay.js']
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
-  worker:
-    <<: *app
-    command: ['node', 'dist/apps/worker/index.js']
-    depends_on:
-      migrate:
-        condition: service_completed_successfully
-      rabbitmq:
-        condition: service_healthy
-
 volumes:
   postgres-data:
-  rabbitmq-data:

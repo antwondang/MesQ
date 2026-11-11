@@ -3,3 +3,5 @@ dist
 .demo-data
 test-results
 package-lock.json
+.internship-data
+coverage

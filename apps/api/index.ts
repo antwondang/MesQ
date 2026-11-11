@@ -5,7 +5,7 @@ import { loadEnvironment, log, readConfig } from '../../packages/server/config.j
 loadEnvironment();
 const config = readConfig();
 const db = connectPostgres(config.DATABASE_URL);
-const server = createApp(db, config).listen(config.PORT, config.HOST, () =>
+const server = createApp(db).listen(config.PORT, config.HOST, () =>
   log('api_listening', { port: config.PORT }),
 );
 for (const signal of ['SIGINT', 'SIGTERM'] as const)

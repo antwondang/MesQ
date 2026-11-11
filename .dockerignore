@@ -6,3 +6,4 @@ dist
 .demo-data
 test-results
 *.log
+.internship-data/

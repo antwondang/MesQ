@@ -1,7 +1,16 @@
 import js from '@eslint/js';
 import tseslint from 'typescript-eslint';
 export default tseslint.config(
-  { ignores: ['dist/**', 'node_modules/**', '.demo-data/**', 'test-results/**'] },
+  {
+    ignores: [
+      'dist/**',
+      'node_modules/**',
+      'coverage/**',
+      '.demo-data/**',
+      '.internship-data/**',
+      'test-results/**',
+    ],
+  },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   {
